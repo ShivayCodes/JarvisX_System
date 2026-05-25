@@ -1,6 +1,7 @@
 import threading
 import importlib
 import tkinter as tk
+from pathlib import Path
 from tkinter import scrolledtext
 
 from jarvis_x.core.config import Config, IS_WINDOWS
@@ -13,10 +14,37 @@ class JarvisGUI:
         self.chat_display = None
         self.input_field = None
         self.tray_icon = None
+        self.theme_image = None
         self._has_tray = False
         self._setup()
 
+    def _load_theme_image(self):
+        theme_path = Path(__file__).resolve().parents[2] / 'data' / 'theme.png'
+        if not theme_path.exists():
+            return
+        try:
+            from PIL import Image, ImageTk
+            image = Image.open(theme_path)
+            image = image.resize((64, 64), Image.LANCZOS)
+            self.theme_image = ImageTk.PhotoImage(image)
+        except Exception:
+            try:
+                self.theme_image = tk.PhotoImage(file=str(theme_path))
+            except Exception:
+                self.theme_image = None
+
     def _setup(self):
+        self.root = tk.Tk()
+        self.root.title(Config.GUI_TITLE)
+        self.root.geometry(f"{Config.GUI_WIDTH}x{Config.GUI_HEIGHT}")
+        self.root.minsize(500, 400)
+
+        self._load_theme_image()
+        if self.theme_image:
+            try:
+                self.root.iconphoto(False, self.theme_image)
+            except Exception:
+                pass
         self.root = tk.Tk()
         self.root.title(Config.GUI_TITLE)
         self.root.geometry(f"{Config.GUI_WIDTH}x{Config.GUI_HEIGHT}")
@@ -29,6 +57,12 @@ class JarvisGUI:
                 pass
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        if self.theme_image:
+            header_frame = tk.Frame(self.root, bg="#1e1e1e")
+            header_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+            tk.Label(header_frame, image=self.theme_image, bg="#1e1e1e").pack(side=tk.LEFT, padx=(0, 10))
+            tk.Label(header_frame, text=Config.APP_NAME, fg="#d4d4d4", bg="#1e1e1e", font=("Consolas", 16, "bold")).pack(side=tk.LEFT, pady=8)
 
         chat_frame = tk.Frame(self.root)
         chat_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
