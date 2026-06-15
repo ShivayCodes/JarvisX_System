@@ -1,1 +1,13 @@
-# Add third-party dependencies here, if needed.
+openai
+transformers
+torch
+sentence-transformers
+numpy
+pyaudio
+pyttsx3
+SpeechRecognition
+python-dotenv
+opencv-python
+sounddevice
+playsound
+scikit-learn
