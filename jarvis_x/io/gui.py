@@ -23,7 +23,7 @@ class JarvisGUI:
         if not theme_path.exists():
             return
         try:
-            from PIL import Image, ImageTk
+            from PIL import Image, ImageTk 
             image = Image.open(theme_path)
             image = image.resize((64, 64), Image.LANCZOS)
             self.theme_image = ImageTk.PhotoImage(image)
