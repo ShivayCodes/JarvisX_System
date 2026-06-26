@@ -28,7 +28,8 @@ class Config:
     CONTEXT_WINDOW = 50
     CONFIDENCE_THRESHOLD = 0.3
     CRITICAL_THINKING = True
-    USE_CLAUDE = True
+    DATASET_POOL_DIR = os.path.join(_root_dir, "dataset_pool")
 
 
 os.makedirs(Config.MEMORY_DIR, exist_ok=True)
+os.makedirs(Config.DATASET_POOL_DIR, exist_ok=True)

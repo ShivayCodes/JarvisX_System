@@ -10,7 +10,7 @@ from jarvis_x.core.config import Config
 from jarvis_x.learning.self_learning import SelfLearning
 from jarvis_x.nlp.intent import IntentParser
 from jarvis_x.memory.store import KnowledgeBase
-from jarvis_x.core.llm import LLMClient
+from jarvis_x.core.algorithm import LocalAIEngine
 from jarvis_x.reasoning.planner import TaskPlanner
 
 
@@ -23,8 +23,15 @@ class JarvisEngine:
         self.last_query = None
         self.last_response = None
         self.self_learning = SelfLearning(self.kb)
-        self.llm = LLMClient(self)
+        self.local_ai = LocalAIEngine(self.kb)
         self.planner = TaskPlanner()
+
+        # Ingest offline dataset files on boot and train
+        try:
+            self.self_learning.dataset_learner.auto_scan_pool()
+        except Exception:
+            pass
+        self.local_ai.rebuild_index()
 
     def process(self, text: str, on_thought_cb=None) -> str:
         if not text.strip():
@@ -35,7 +42,7 @@ class JarvisEngine:
         # Handle Critical Thinking Toggles
         if text_lower in ("enable critical thinking", "critical thinking on", "turn on critical thinking"):
             Config.CRITICAL_THINKING = True
-            return "Critical thinking mode enabled. I will now analyze complex queries step-by-step."
+            return "Critical thinking mode enabled. I will show semantic indexing metrics and reasoning steps."
         if text_lower in ("disable critical thinking", "critical thinking off", "turn off critical thinking"):
             Config.CRITICAL_THINKING = False
             return "Critical thinking mode disabled. Switched to direct processing."
@@ -44,6 +51,7 @@ class JarvisEngine:
 
         correction = self.self_learning.handle_correction(text)
         if correction:
+            self.local_ai.rebuild_index()
             return f"Ah, you meant: {correction}. I'll remember that."
 
         if intent.action == 'shutdown':
@@ -60,10 +68,14 @@ class JarvisEngine:
             return self._self_learn()
 
         if intent.action == 'load_dataset':
-            return self._load_dataset(intent)
+            res = self._load_dataset(intent)
+            self.local_ai.rebuild_index()
+            return res
 
         if intent.action == 'learn':
-            return self._learn(intent)
+            res = self._learn(intent)
+            self.local_ai.rebuild_index()
+            return res
 
         if intent.action == 'recall':
             return self._recall(intent, text)
@@ -87,42 +99,34 @@ class JarvisEngine:
             return self._feedback(text, False)
 
         if intent.action == 'unknown':
-            # Check if LLM client is available
-            if self.llm.is_available():
-                if Config.CRITICAL_THINKING:
-                    # Run critical level thinking loop
-                    agent_res = self.planner.plan_and_execute_agent(text, self.llm, self, on_thought_cb)
-                    return agent_res.get("result", "Thinking failed.")
-                else:
-                    # Direct chat response without agent loop
-                    messages = [{"role": "user", "content": text}]
-                    res = self.llm.chat(messages, use_tools=False)
-                    return res.get("content", "Failed to communicate with LLM.")
+            # Execute local semantic search & Markov synthesis
+            res_dict = self.local_ai.query(text)
             
-            # Fallback to local KB
-            result = self.kb.recall(text)
-            if result:
-                return result
-            return f"I didn't understand. Try 'help' to see what I can do."
+            # Show thoughts in CLI/GUI if critical thinking is enabled
+            if Config.CRITICAL_THINKING and on_thought_cb:
+                for thought in res_dict.get("thoughts", []):
+                    on_thought_cb(thought)
+                    
+            return res_dict.get("result", "I am still learning.")
 
         return f"Command '{intent.action}' not implemented yet."
 
     def _greet(self):
-        return f"Hello {Config.OWNER}. Systems online."
+        return f"Hello {Config.OWNER}. Local AI systems online."
 
     def _help(self):
-        llm_status = "Available" if self.llm.is_available() else "Unavailable (set ANTHROPIC_API_KEY)"
         ct_status = "ON" if Config.CRITICAL_THINKING else "OFF"
         return (f"Commands: open site [url] | system info | find files for [name] | "
                 f"remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
                 f"+1 / -1 to teach me\n\n"
-                f"AI Config: LLM API ({llm_status}) | Critical Thinking ({ct_status})\n"
+                f"AI Config: Fully Local (No External APIs) | Critical Thinking ({ct_status})\n"
                 f"Toggle Critical Thinking: 'enable critical thinking' / 'disable critical thinking'")
 
     def _self_learn(self):
         count = self.self_learning.auto_improve(dry_run=False)
         summary = self.self_learning.summarize()
         if count:
+            self.local_ai.rebuild_index()
             return f"Self-learning cycle complete: learned {count} new patterns.\n{summary}"
         return "Self-learning is active and watching.\n" + summary
 
@@ -183,6 +187,10 @@ class JarvisEngine:
         self.self_learning.reinforce(source_text, source_response, positive)
         tag = "+1" if positive else "-1"
         self.kb.log_learning("feedback", f"{tag} {source_text}")
+        
+        # Reinforce local AI vector weights
+        self.local_ai.rebuild_index()
+        
         if positive:
             return "Glad I could help!"
         return "Thanks for the feedback. I'll improve."
@@ -202,6 +210,7 @@ class JarvisEngine:
             if extracted and intent.action == "unknown":
                 response += f"\n(I noticed: {extracted[0]})"
                 self.last_response = response
+                self.local_ai.rebuild_index()
             self.self_learning.set_context(self.last_query, self.last_response)
             self.self_learning.auto_improve()
         except Exception:

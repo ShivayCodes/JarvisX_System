@@ -66,128 +66,45 @@ class TaskPlanner:
                 results.append(engine.process(text))
         return results
 
-    def plan_and_execute_agent(self, goal: str, llm, engine, on_thought_cb: Optional[Callable[[str], None]] = None) -> dict:
+    def plan_and_execute_agent(self, goal: str, local_ai, engine, on_thought_cb: Optional[Callable[[str], None]] = None) -> dict:
         """
-        Executes an agentic reasoning loop using Claude/OpenAI tool calling.
+        Executes a fully local reasoning loop.
+        Decomposes the goal, executes matching local tools, and integrates results.
         """
         thoughts = []
-        messages = [
-            {"role": "user", "content": goal}
-        ]
-
-        system_prompt = (
-            "You are JARVIS-X, an advanced self-learning AI assistant.\n"
-            "Critical thinking mode is active. When answering:\n"
-            "1. Explain your reasoning and thinking process step-by-step.\n"
-            "2. Use tools to search files, open websites, learn new facts, or recall them if necessary.\n"
-            "3. Analyze outputs critically and correct course if something fails."
-        )
-
-        max_turns = 6
-        final_answer = ""
-
-        # Log initial thought
-        init_thought = f"Analyzing goal: '{goal}'. Initializing critical thinking loop."
+        
+        init_thought = f"Decomposing local agent goal: '{goal}'"
         thoughts.append(init_thought)
         if on_thought_cb:
             on_thought_cb(init_thought)
 
-        for turn in range(max_turns):
-            response = llm.chat(messages, system_prompt=system_prompt, use_tools=True)
+        steps = self.decompose(goal)
+        
+        # If the goal matches a known system action
+        if steps and steps[0]["action"] != "unknown":
+            step = steps[0]
+            action = step["action"]
+            desc = step["description"]
             
-            # Extract any thinking/reasoning blocks
-            if response.get("thinking"):
-                for thought in response["thinking"]:
-                    thoughts.append(thought)
-                    if on_thought_cb:
-                        on_thought_cb(thought)
+            thoughts.append(f"Matching local tool found: '{action}'. Description: {desc}")
+            if on_thought_cb:
+                on_thought_cb(f"Selected Local Tool: {action}")
 
-            # If there's text content, log it or append to final answer
-            text_content = response.get("content", "").strip()
-            if text_content:
-                # We can treat non-tool intermediate text as thoughts/reasoning
-                if response.get("tool_calls"):
-                    thoughts.append(text_content)
-                    if on_thought_cb:
-                        on_thought_cb(text_content)
-                else:
-                    final_answer = text_content
+            # Run the tool
+            res = self.execute_plan(steps, engine)
+            final_res = res[0] if res else "Execution failed."
+            return {"result": final_res, "thoughts": thoughts}
 
-            tool_calls = response.get("tool_calls", [])
-            if not tool_calls:
-                break
-
-            # Handle tool calls
-            # For Anthropic/OpenAI compatibility we need to construct assistant and tool message blocks
-            assistant_content = []
-            if text_content:
-                assistant_content.append({"type": "text", "text": text_content})
+        # Otherwise, fall back to semantic search & synthesis
+        thoughts.append("No direct system action matched. Querying offline knowledge base.")
+        if on_thought_cb:
+            on_thought_cb("Searching offline knowledge database...")
             
-            for tool_call in tool_calls:
-                tool_name = tool_call["name"]
-                tool_args = tool_call["arguments"]
-                tool_id = tool_call["id"]
-
-                thought_msg = f"Executing function: '{tool_name}' with args: {json.dumps(tool_args)}"
-                thoughts.append(thought_msg)
-                if on_thought_cb:
-                    on_thought_cb(thought_msg)
-
-                # Execute tool
-                tool_result = llm.execute_tool(tool_name, tool_args)
-                result_msg = f"Function result: {tool_result}"
-                thoughts.append(result_msg)
-                if on_thought_cb:
-                    on_thought_cb(result_msg)
-
-                # Construct assistant content block for Anthropic
-                if llm.provider == "anthropic":
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": tool_id,
-                        "name": tool_name,
-                        "input": tool_args
-                    })
-
-            if llm.provider == "anthropic":
-                messages.append({"role": "assistant", "content": assistant_content})
-                # Add tool responses
-                for tool_call in tool_calls:
-                    tool_id = tool_call["id"]
-                    tool_name = tool_call["name"]
-                    tool_result = llm.execute_tool(tool_name, tool_call["arguments"])
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": tool_result
-                            }
-                        ]
-                    })
-            else: # OpenAI fallback
-                messages.append({
-                    "role": "assistant",
-                    "content": text_content,
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}
-                        } for tc in tool_calls
-                    ]
-                })
-                for tool_call in tool_calls:
-                    tool_result = llm.execute_tool(tool_call["name"], tool_call["arguments"])
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "name": tool_call["name"],
-                        "content": tool_result
-                    })
-
-        if not final_answer:
-            final_answer = "Thinking process completed but no final answer was generated."
-
-        return {"result": final_answer, "thoughts": thoughts}
+        res_dict = local_ai.query(goal)
+        for t in res_dict.get("thoughts", []):
+            thoughts.append(t)
+            
+        return {
+            "result": res_dict.get("result", "I am still learning."),
+            "thoughts": thoughts
+        }
