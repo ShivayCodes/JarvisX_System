@@ -45,11 +45,6 @@ class JarvisGUI:
                 self.root.iconphoto(False, self.theme_image)
             except Exception:
                 pass
-        self.root = tk.Tk()
-        self.root.title(Config.GUI_TITLE)
-        self.root.geometry(f"{Config.GUI_WIDTH}x{Config.GUI_HEIGHT}")
-        self.root.minsize(500, 400)
-
         if IS_WINDOWS:
             try:
                 self.root.iconbitmap(default="")
