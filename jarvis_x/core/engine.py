@@ -10,6 +10,8 @@ from jarvis_x.core.config import Config
 from jarvis_x.learning.self_learning import SelfLearning
 from jarvis_x.nlp.intent import IntentParser
 from jarvis_x.memory.store import KnowledgeBase
+from jarvis_x.core.llm import LLMClient
+from jarvis_x.reasoning.planner import TaskPlanner
 
 
 class JarvisEngine:
@@ -21,10 +23,22 @@ class JarvisEngine:
         self.last_query = None
         self.last_response = None
         self.self_learning = SelfLearning(self.kb)
+        self.llm = LLMClient(self)
+        self.planner = TaskPlanner()
 
-    def process(self, text: str) -> str:
+    def process(self, text: str, on_thought_cb=None) -> str:
         if not text.strip():
             return "Say something."
+
+        text_lower = text.lower().strip()
+
+        # Handle Critical Thinking Toggles
+        if text_lower in ("enable critical thinking", "critical thinking on", "turn on critical thinking"):
+            Config.CRITICAL_THINKING = True
+            return "Critical thinking mode enabled. I will now analyze complex queries step-by-step."
+        if text_lower in ("disable critical thinking", "critical thinking off", "turn off critical thinking"):
+            Config.CRITICAL_THINKING = False
+            return "Critical thinking mode disabled. Switched to direct processing."
 
         intent = IntentParser.parse(text)
 
@@ -73,6 +87,19 @@ class JarvisEngine:
             return self._feedback(text, False)
 
         if intent.action == 'unknown':
+            # Check if LLM client is available
+            if self.llm.is_available():
+                if Config.CRITICAL_THINKING:
+                    # Run critical level thinking loop
+                    agent_res = self.planner.plan_and_execute_agent(text, self.llm, self, on_thought_cb)
+                    return agent_res.get("result", "Thinking failed.")
+                else:
+                    # Direct chat response without agent loop
+                    messages = [{"role": "user", "content": text}]
+                    res = self.llm.chat(messages, use_tools=False)
+                    return res.get("content", "Failed to communicate with LLM.")
+            
+            # Fallback to local KB
             result = self.kb.recall(text)
             if result:
                 return result
@@ -84,9 +111,13 @@ class JarvisEngine:
         return f"Hello {Config.OWNER}. Systems online."
 
     def _help(self):
-        return ("Commands: open site [url] | system info | find files for [name] | "
-                "remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
-                "+1 / -1 to teach me")
+        llm_status = "Available" if self.llm.is_available() else "Unavailable (set ANTHROPIC_API_KEY)"
+        ct_status = "ON" if Config.CRITICAL_THINKING else "OFF"
+        return (f"Commands: open site [url] | system info | find files for [name] | "
+                f"remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
+                f"+1 / -1 to teach me\n\n"
+                f"AI Config: LLM API ({llm_status}) | Critical Thinking ({ct_status})\n"
+                f"Toggle Critical Thinking: 'enable critical thinking' / 'disable critical thinking'")
 
     def _self_learn(self):
         count = self.self_learning.auto_improve(dry_run=False)
@@ -124,6 +155,8 @@ class JarvisEngine:
 
     def _web_open(self, intent):
         url = intent.entities.get('url', '')
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
         webbrowser.open(url)
         return f"Opened {url} in your browser."
 
@@ -154,9 +187,9 @@ class JarvisEngine:
             return "Glad I could help!"
         return "Thanks for the feedback. I'll improve."
 
-    def process_with_history(self, text: str) -> str:
+    def process_with_history(self, text: str, on_thought_cb=None) -> str:
         self.last_query = text
-        response = self.process(text)
+        response = self.process(text, on_thought_cb)
         self.last_response = response
         self.history.append({"in": text, "out": response})
         self.kb.save_interaction(text, response)

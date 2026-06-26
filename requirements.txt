@@ -12,3 +12,4 @@ sounddevice
 playsound
 scikit-learn
 Pillow
+anthropic

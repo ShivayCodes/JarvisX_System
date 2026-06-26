@@ -72,6 +72,7 @@ class JarvisGUI:
         self.chat_display.tag_config("user", foreground="#569cd6", font=("Consolas", 10, "bold"))
         self.chat_display.tag_config("jarvis", foreground="#6a9955", font=("Consolas", 10, "bold"))
         self.chat_display.tag_config("system", foreground="#808080", font=("Consolas", 9))
+        self.chat_display.tag_config("thought", foreground="#ce9178", font=("Consolas", 9, "italic"))
         self.chat_display.tag_config("error", foreground="#f44747", font=("Consolas", 10, "bold"))
 
         input_frame = tk.Frame(self.root)
@@ -84,16 +85,29 @@ class JarvisGUI:
         self.input_field.bind("<Return>", lambda e: self._send())
 
         send_btn = tk.Button(input_frame, text="Send", command=self._send,
-                              bg="#0e639c", fg="white", relief=tk.FLAT,
-                              padx=15, cursor="hand2")
+                               bg="#0e639c", fg="white", relief=tk.FLAT,
+                               padx=15, cursor="hand2")
         send_btn.pack(side=tk.RIGHT, padx=(5, 0))
 
         status_frame = tk.Frame(self.root, bg="#252526")
         status_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
-        self.status_label = tk.Label(status_frame, text="Online", anchor=tk.W,
+        ct_status_str = "ON" if Config.CRITICAL_THINKING else "OFF"
+        self.status_label = tk.Label(status_frame, text=f"Online | Critical Thinking: {ct_status_str}", anchor=tk.W,
                                       bg="#252526", fg="#808080", font=("Consolas", 8))
-        self.status_label.pack(fill=tk.X, padx=10, pady=2)
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=2)
+
+        # Critical Thinking Toggle Checkbox
+        self.ct_var = tk.BooleanVar(value=Config.CRITICAL_THINKING)
+        def toggle_ct():
+            Config.CRITICAL_THINKING = self.ct_var.get()
+            self.status_label.config(text=f"Online | Critical Thinking: {'ON' if Config.CRITICAL_THINKING else 'OFF'}")
+        
+        self.ct_cb = tk.Checkbutton(status_frame, text="Critical Thinking Mode", variable=self.ct_var,
+                                    command=toggle_ct, bg="#252526", fg="#d4d4d4",
+                                    selectcolor="#1e1e1e", activebackground="#252526",
+                                    activeforeground="#d4d4d4", font=("Consolas", 8))
+        self.ct_cb.pack(side=tk.RIGHT, padx=10)
 
         try:
             importlib.import_module("pystray")
@@ -121,6 +135,10 @@ class JarvisGUI:
         except Exception:
             pass
 
+    def _on_thought(self, thought_text: str):
+        self._append("Thought", thought_text, "thought")
+        self.root.update()
+
     def _send(self):
         text = self.input_field.get().strip()
         if not text:
@@ -129,7 +147,10 @@ class JarvisGUI:
         self._append("You", text, "user")
         self.root.update()
         try:
-            response = self.engine.process_with_history(text)
+            # Sync checkbox state to config
+            self.ct_var.set(Config.CRITICAL_THINKING)
+            
+            response = self.engine.process_with_history(text, on_thought_cb=self._on_thought)
             self._append("JARVIS", response)
             if not self.engine.running:
                 self.root.after(500, self._on_close)

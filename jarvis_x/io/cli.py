@@ -14,8 +14,12 @@ class JarvisCLI:
                 text = input(f"[{Config.OWNER}]> ").strip()
                 if not text:
                     continue
-                response = self.engine.process_with_history(text)
-                print(f"  {response}")
+                
+                def on_thought(thought_text):
+                    print(f"  [Thinking] {thought_text}")
+                
+                response = self.engine.process_with_history(text, on_thought_cb=on_thought)
+                print(f"  JARVIS: {response}")
             except (EOFError, KeyboardInterrupt):
                 print()
                 break

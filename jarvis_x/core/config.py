@@ -27,6 +27,8 @@ class Config:
     APP_NAME = "JarvisX"
     CONTEXT_WINDOW = 50
     CONFIDENCE_THRESHOLD = 0.3
+    CRITICAL_THINKING = True
+    USE_CLAUDE = True
 
 
 os.makedirs(Config.MEMORY_DIR, exist_ok=True)
