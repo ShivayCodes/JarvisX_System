@@ -11,4 +11,4 @@ opencv-python
 sounddevice
 playsound
 scikit-learn
--
+Pillow
