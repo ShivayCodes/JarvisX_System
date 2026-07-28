@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""
-JARVIS-X v7.0 — Self-Learning AI Assistant
-CLI: python jarvis_v6.py --cli
-GUI: python jarvis_v6.py
-Install startup: python jarvis_v6.py --install
-"""
-import sys
+"""JARVIS-X v7.0 — Self-Learning AI Assistant."""
 import os
+import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jarvis_x.core.config import Config
 from jarvis_x.core.engine import JarvisEngine
+from jarvis_x.core.environment_setup import initialize_environment
 from jarvis_x.io.cli import JarvisCLI
 from jarvis_x.io.gui import JarvisGUI
 from jarvis_x.core.plugin_manager import PluginManager
+from jarvis_x.learning.dataset_validator import DatasetValidator
 
 
 class AutoStart:
@@ -23,12 +21,11 @@ class AutoStart:
         script = os.path.abspath(__file__)
         from jarvis_x.core.config import IS_WINDOWS, IS_LINUX, IS_MAC
         if IS_WINDOWS:
-            startup = os.path.join(os.getenv("APPDATA", ""),
-                                   r"Microsoft\Windows\Start Menu\Programs\Startup")
+            startup = os.path.join(os.getenv("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
             if not os.path.isdir(startup):
                 print("Startup folder not found.")
                 return False
-            vbs_content = f'''CreateObject("WScript.Shell").Run """{sys.executable}"" ""{script}""", 0, False'''
+            vbs_content = f'''CreateObject("WScript.Shell").Run """{sys.executable}"" """{script}""", 0, False'''
             vbs_path = os.path.join(startup, "JarvisX.launch.vbs")
             with open(vbs_path, "w") as f:
                 f.write(vbs_content)
@@ -71,8 +68,7 @@ class AutoStart:
     def remove():
         from jarvis_x.core.config import IS_WINDOWS, IS_LINUX, IS_MAC
         if IS_WINDOWS:
-            startup = os.path.join(os.getenv("APPDATA", ""),
-                                   r"Microsoft\Windows\Start Menu\Programs\Startup")
+            startup = os.path.join(os.getenv("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
             vbs_path = os.path.join(startup, "JarvisX.launch.vbs")
             if os.path.isfile(vbs_path):
                 os.remove(vbs_path)
@@ -101,12 +97,27 @@ class AutoStart:
         return False
 
 
+def _run_benchmark(engine: JarvisEngine):
+    queries = ["hello", "what is jarvis-x", "remember local ai", "find files for python"]
+    timings = []
+    for query in queries:
+        start = time.perf_counter()
+        engine.process(query)
+        timings.append(time.perf_counter() - start)
+    avg_ms = sum(timings) / len(timings) * 1000
+    print(f"Benchmark complete. Average query latency: {avg_ms:.2f} ms")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="JARVIS-X v7.0 - Self-Learning AI Assistant")
     parser.add_argument("--cli", action="store_true", help="Run in CLI mode")
     parser.add_argument("--install", action="store_true", help="Install auto-start on boot")
     parser.add_argument("--remove", action="store_true", help="Remove auto-start")
+    parser.add_argument("--init", action="store_true", help="Initialize dataset and memory directories")
+    parser.add_argument("--stats", action="store_true", help="Show offline knowledge statistics")
+    parser.add_argument("--validate", action="store_true", help="Validate local dataset files")
+    parser.add_argument("--benchmark", action="store_true", help="Run a simple offline benchmark")
     args = parser.parse_args()
 
     if args.install:
@@ -116,8 +127,28 @@ def main():
         AutoStart.remove()
         return
 
-    engine = JarvisEngine()
+    if args.init:
+        summary = initialize_environment()
+        print(summary)
+        return
 
+    if args.stats:
+        engine = JarvisEngine()
+        print(engine.kb.get_stats())
+        print(engine.local_ai.get_stats())
+        return
+
+    if args.validate:
+        report = DatasetValidator(Config.DATASET_POOL_DIR).validate_directory(Config.DATASET_POOL_DIR)
+        print(report)
+        return
+
+    if args.benchmark:
+        engine = JarvisEngine()
+        _run_benchmark(engine)
+        return
+
+    engine = JarvisEngine()
     pm = PluginManager(engine)
     pm.discover()
 
