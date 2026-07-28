@@ -1,4 +1,4 @@
-openai
+random
 transformers
 torch
 sentence-transformers
@@ -12,4 +12,4 @@ sounddevice
 playsound
 scikit-learn
 Pillow
-anthropic
+tensorflow
