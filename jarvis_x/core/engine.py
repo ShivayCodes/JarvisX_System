@@ -17,6 +17,7 @@ from jarvis_x.reasoning.planner import TaskPlanner
 from jarvis_x.nlp.intent import IntentParser
 from jarvis_x.conversation.conversation_manager import ConversationManager
 from jarvis_x.core.environment_setup import initialize_environment
+from jarvis_x.core.plugin_manager import PluginManager
 
 
 class JarvisEngine:
@@ -35,6 +36,8 @@ class JarvisEngine:
         self.planner = TaskPlanner()
         self.query_processor = QueryProcessor()
         self.conversation_manager = ConversationManager()
+        self.pm = PluginManager(self)
+        self.pm.discover()
 
         try:
             self.self_learning.dataset_learner.auto_scan_pool()
@@ -62,6 +65,12 @@ class JarvisEngine:
         if correction:
             self.local_ai.rebuild_index()
             return f"Ah, you meant: {correction}. I'll remember that."
+
+        if intent.action in self.pm.skills:
+            try:
+                return self.pm.skills[intent.action](intent)
+            except Exception as e:
+                return f"Error executing plugin skill '{intent.action}': {e}"
 
         if intent.action == "shutdown":
             self.running = False

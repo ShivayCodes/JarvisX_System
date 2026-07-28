@@ -16,7 +16,8 @@ class IntentResult:
 class IntentParser:
     PATTERNS = [
         (r'(open|go to|visit|navigate)\s+(?:site|website|page|url)?\s*(https?://[^\s]+)', 'web_open', {'url': 2}),
-        (r'(scrape|extract)\s+from\s+(https?://[^\s]+)\s+using\s+(.+)', 'web_scrape', {'url': 1, 'selector': 2}),
+        (r'(scrape|extract)\s+from\s+(https?://[^\s]+)\s+using\s+(.+)', 'web_scrape', {'url': 2, 'selector': 3}),
+        (r'(?:learn\s+from\s+web|search\s+and\s+learn|web\s+learn|search\s+web\s+for)\s+(?:about\s+)?(.+)', 'web_learn', {'query': 1}),
         (r'(system|computer)\s+(info|status|spec)', 'sys_info', {}),
         (r'(find|search)\s+files?\s+for\s+(.+)', 'find_files', {'query': 2}),
         (r'(hello|hi|hey|good morning|good evening)', 'greet', {}),
