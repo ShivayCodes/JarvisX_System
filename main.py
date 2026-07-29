@@ -28,7 +28,7 @@ class AutoStart:
             vbs_content = f'''CreateObject("WScript.Shell").Run """{sys.executable}"" """{script}""", 0, False'''
             vbs_path = os.path.join(startup, "JarvisX.launch.vbs")
             with open(vbs_path, "w") as f:
-                f.write(vbs_content)
+                 f.write(vbs_content)
             print(f"Auto-start installed: {vbs_path}")
             return True
         elif IS_LINUX:
