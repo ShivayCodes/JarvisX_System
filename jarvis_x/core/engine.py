@@ -18,6 +18,9 @@ from jarvis_x.nlp.intent import IntentParser
 from jarvis_x.conversation.conversation_manager import ConversationManager
 from jarvis_x.core.environment_setup import initialize_environment
 from jarvis_x.core.plugin_manager import PluginManager
+from jarvis_x.core.llm_backend import OllamaClient
+import re
+
 
 
 class JarvisEngine:
@@ -39,6 +42,8 @@ class JarvisEngine:
         self.pm = PluginManager(self)
         self.pm.discover()
 
+        self.llm_client = OllamaClient()
+        self.llm_history = []
         try:
             self.self_learning.dataset_learner.auto_scan_pool()
         except Exception:
