@@ -1,5 +1,3 @@
-random
-setencetransformers
 torch
 sentence-transformers
 numpy
