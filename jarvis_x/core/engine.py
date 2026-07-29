@@ -62,10 +62,130 @@ class JarvisEngine:
             Config.CRITICAL_THINKING = False
             return "Critical thinking mode disabled. Switched to direct processing."
 
+        # Intercept quick commands
         normalized_text = self.query_processor.normalize(text)
         intent = IntentParser.parse(normalized_text)
-        intent_type = self.query_processor.classify_intent(normalized_text)
 
+        if intent.action == "shutdown":
+            self.running = False
+            return "Shutting down. Goodbye."
+        if intent.action == "greet":
+            return self._greet()
+        if intent.action == "help":
+            return self._help()
+        if intent.action == "self_learn":
+            return self._self_learn()
+        if intent.action == "feedback_positive":
+            return self._feedback(normalized_text, True)
+        if intent.action == "feedback_negative":
+            return self._feedback(normalized_text, False)
+
+        # Try local LLM backend
+        if Config.LLM_ENABLED:
+            if self.llm_client.is_available():
+                try:
+                    # Retrieve context (RAG)
+                    rag_res = self.local_ai.query(normalized_text)
+                    retrieved_context = rag_res.get("result", "")
+                    
+                    # Log retrieval thought
+                    if on_thought_cb:
+                        on_thought_cb(f"Retrieved Context: {retrieved_context[:200]}...")
+
+                    # Prepare messages payload
+                    messages = []
+                    for turn in self.llm_history:
+                        messages.append(turn)
+                    
+                    user_content = (
+                        f"Context from local knowledge base:\n{retrieved_context}\n\n"
+                        f"User query: {text}"
+                    )
+                    messages.append({"role": "user", "content": user_content})
+
+                    # Call LLM
+                    raw_response = self.llm_client.chat(messages, Config.SYSTEM_PROMPT)
+
+                    # Extract thoughts
+                    thinking_content = ""
+                    thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
+                    if thinking_match:
+                        thinking_content = thinking_match.group(1).strip()
+                        if on_thought_cb and thinking_content:
+                            on_thought_cb(thinking_content)
+                    
+                    # Clean response
+                    cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
+
+                    # Handle Tool Use
+                    tool_pattern = re.compile(r'\[TOOL:\s*(\w+)(.*?)\]')
+                    tool_matches = tool_pattern.findall(cleaned_response)
+                    
+                    if tool_matches:
+                        for tool_name, args_str in tool_matches:
+                            args = {}
+                            for k, v in re.findall(r'(\w+)=(?:"([^"]*)"|\'([^\']*)\'|([^\s\]]+))', args_str):
+                                args[k] = v[0] or v[1] or v[2] if isinstance(v, tuple) else v
+                            
+                            # Clean args dict
+                            clean_args = {}
+                            for key, val in args.items():
+                                if isinstance(val, tuple):
+                                    clean_args[key] = next((x for x in val if x), "")
+                                else:
+                                    clean_args[key] = val
+
+                            if on_thought_cb:
+                                on_thought_cb(f"Executing tool: {tool_name} with args {clean_args}")
+                            
+                            tool_result = self._execute_tool(tool_name, clean_args)
+                            
+                            # Feed back to LLM
+                            messages.append({"role": "assistant", "content": raw_response})
+                            messages.append({"role": "user", "content": f"Tool '{tool_name}' output: {tool_result}"})
+                            
+                            raw_response = self.llm_client.chat(messages, Config.SYSTEM_PROMPT)
+                            
+                            # Parse thinking again if any
+                            thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
+                            if thinking_match:
+                                thinking_content = thinking_match.group(1).strip()
+                                if on_thought_cb and thinking_content:
+                                    on_thought_cb(thinking_content)
+                            
+                            cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
+
+                    # Handle Artifacts
+                    artifact_pattern = re.compile(r'\[ARTIFACT:\s*([^\s\]]+)\](.*?)\[/ARTIFACT\]', re.DOTALL)
+                    artifact_matches = artifact_pattern.findall(cleaned_response)
+                    if artifact_matches:
+                        project_root = Path(__file__).resolve().parents[2]
+                        artifacts_dir = project_root / "artifacts"
+                        artifacts_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        for filename, content in artifact_matches:
+                            filepath = artifacts_dir / filename
+                            filepath.write_text(content.strip(), encoding="utf-8")
+                            
+                            note = f"\n\n[Artifact saved to: {filepath.name}]"
+                            cleaned_response += note
+                            
+                            # Automatically open HTML/SVG files
+                            if filename.lower().endswith((".html", ".htm", ".svg")):
+                                webbrowser.open(filepath.as_uri())
+
+                        # Strip artifact tags from final printed response to keep it clean
+                        cleaned_response = re.sub(r'\[ARTIFACT:\s*[^\s\]]+\].*?\[/ARTIFACT\]', '', cleaned_response, flags=re.DOTALL).strip()
+
+                    return cleaned_response
+                except Exception as e:
+                    if on_thought_cb:
+                        on_thought_cb(f"LLM Error: {e}. Falling back to standard algorithms.")
+
+        # Fallback to standard TF-IDF & Markov
+        if on_thought_cb:
+            on_thought_cb("[Warning] Local LLM (Ollama) is not running/available. Falling back to TF-IDF & Markov engine. To enable local LLMs, start Ollama locally.")
+        
         correction = self.self_learning.handle_correction(normalized_text)
         if correction:
             self.local_ai.rebuild_index()
@@ -77,15 +197,6 @@ class JarvisEngine:
             except Exception as e:
                 return f"Error executing plugin skill '{intent.action}': {e}"
 
-        if intent.action == "shutdown":
-            self.running = False
-            return "Shutting down. Goodbye."
-        if intent.action == "greet":
-            return self._greet()
-        if intent.action == "help":
-            return self._help()
-        if intent.action == "self_learn":
-            return self._self_learn()
         if intent.action == "load_dataset":
             res = self._load_dataset(intent)
             self.local_ai.rebuild_index()
@@ -104,19 +215,37 @@ class JarvisEngine:
             return self._web_scrape(intent)
         if intent.action == "find_files":
             return self._find_files(intent)
-        if intent.action == "feedback_positive":
-            return self._feedback(normalized_text, True)
-        if intent.action == "feedback_negative":
-            return self._feedback(normalized_text, False)
 
-        if intent.action == "unknown":
+        if intent.action == "unknown" or True:
             res_dict = self.local_ai.query(normalized_text)
             if Config.CRITICAL_THINKING and on_thought_cb:
                 for thought in res_dict.get("thoughts", []):
                     on_thought_cb(thought)
             return res_dict.get("result", "I am still learning.")
 
-        return f"Command '{intent.action}' not implemented yet."
+    def _execute_tool(self, name: str, args: dict) -> str:
+        from jarvis_x.nlp.intent import IntentResult
+        intent = IntentResult(action=name, entities=args)
+        
+        if name in self.pm.skills:
+            try:
+                return self.pm.skills[name](intent)
+            except Exception as e:
+                return f"Error: {e}"
+        
+        if name == "sys_info":
+            return self._sys_info()
+        if name == "find_files":
+            return self._find_files(intent)
+        if name == "web_open":
+            return self._web_open(intent)
+        if name == "web_scrape":
+            # scrape skill is in the pm.skills usually under 'web_scrape'
+            if "web_scrape" in self.pm.skills:
+                return self.pm.skills["web_scrape"](intent)
+            return self._web_scrape(intent)
+            
+        return f"Unknown tool: {name}"
 
     def _greet(self):
         return f"Hello {Config.OWNER}. Local AI systems online."
@@ -127,7 +256,7 @@ class JarvisEngine:
             f"Commands: open site [url] | system info | find files for [name] | "
             f"remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
             f"+1 / -1 to teach me\n\n"
-            f"AI Config: Fully Local (No External APIs) | Critical Thinking ({ct_status})\n"
+            f"AI Config: Fully Local LLM (Ollama) with TF-IDF fallback | Critical Thinking ({ct_status})\n"
             f"Toggle Critical Thinking: 'enable critical thinking' / 'disable critical thinking'"
         )
 
@@ -170,6 +299,8 @@ class JarvisEngine:
 
     def _web_open(self, intent):
         url = intent.entities.get("url", "")
+        if not url:
+            return "No URL provided."
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         webbrowser.open(url)
@@ -209,6 +340,11 @@ class JarvisEngine:
         self.last_response = response
         self.history.append({"in": text, "out": response})
         self.kb.save_interaction(text, response)
+
+        # Update LLM History
+        self.llm_history.append({"role": "user", "content": text})
+        self.llm_history.append({"role": "assistant", "content": response})
+        self.llm_history = self.llm_history[-20:] # Bound history size
 
         try:
             intent = IntentParser.parse(text)
