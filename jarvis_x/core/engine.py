@@ -89,9 +89,10 @@ class JarvisEngine:
                 retrieved = self.rag.search(normalized_text, top_k=4)
                 if retrieved:
                     retrieved_context = "\n\n".join(
-                        f"[Source: {item.get('source', 'local')}] {item['text']}"
-                        for item in retrieved
-                    )
+                    f"[Source: {item.get('source', 'local')}] {item['text']}"
+                    for item in retrieved
+                )
+                retrieved_context = retrieved_context[:9000]
                 else:
                     kb_res = self.local_ai.query(normalized_text)
                     retrieved_context = kb_res.get("result", "")
@@ -153,7 +154,10 @@ class JarvisEngine:
                     artifacts_dir = project_root / "artifacts"
                     artifacts_dir.mkdir(parents=True, exist_ok=True)
                     for filename, content in artifact_matches:
-                        filepath = artifacts_dir / filename
+                        safe_name = Path(filename).name
+                        if safe_name in {"", ".", ".."}:
+                            continue
+                        filepath = artifacts_dir / safe_name
                         filepath.write_text(content.strip(), encoding="utf-8")
                         cleaned_response += f"\n\n[Artifact saved to: {filepath.name}]"
                         if filename.lower().endswith((".html", ".htm", ".svg")):
@@ -337,9 +341,11 @@ class JarvisEngine:
         self.kb.save_interaction(text, response)
 
         # Update LLM History
-        self.llm_history.append({"role": "user", "content": text})
-        self.llm_history.append({"role": "assistant", "content": response})
-        self.llm_history = self.llm_history[-20:] # Bound history size
+        # process() already records a successful local-LLM exchange. Keep a bounded history.
+        if not self.llm_history or self.llm_history[-1].get("content") != response:
+            self.llm_history.append({"role": "user", "content": text})
+            self.llm_history.append({"role": "assistant", "content": response})
+        self.llm_history = self.llm_history[-(Config.CONTEXT_WINDOW * 2):]
 
         try:
             intent = IntentParser.parse(text)
