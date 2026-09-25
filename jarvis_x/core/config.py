@@ -41,12 +41,17 @@ class Config:
     BATCH_FEEDBACK_SIZE = 100
     MEMORY_COMPACTION_INTERVAL = 7
     LLM_ENABLED = True
-    OLLAMA_HOST = "http://localhost:11434"
-    OLLAMA_MODEL = "qwen2.5:1.5b-instruct"
+    HF_MODEL_ID = os.getenv("JARVISX_HF_MODEL", "HuggingFaceTB/SmolLM2-360M-Instruct")
+    EMBEDDING_MODEL_ID = os.getenv("JARVISX_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    HF_MAX_NEW_TOKENS = int(os.getenv("JARVISX_MAX_NEW_TOKENS", "256"))
+    HF_TEMPERATURE = float(os.getenv("JARVISX_TEMPERATURE", "0.3"))
+    HF_TOP_P = float(os.getenv("JARVISX_TOP_P", "0.9"))
+    RAG_INDEX_PATH = os.path.join(_root_dir, "cache", "rag_documents.json")
+    RAG_MIN_SCORE = 0.35
     SYSTEM_PROMPT = (
-        "You are JARVIS-X, a highly intelligent, premium, fully offline AI assistant. "
+        "You are JARVIS-X, a local-first AI assistant. "
         "Your goal is to help the user with any queries. You must follow the instructions below:\n"
-        "1. Start your response with a <thinking>...</thinking> block outlining your thought process, reasoning steps, and any tool calls you need to make.\n"
+        "1. Give concise final answers. Do not expose private chain-of-thought or hidden reasoning.\n"
         "2. If you need info not directly in context, you can make tool calls by writing: [TOOL: name key=val]. Available tools are:\n"
         "   - sys_info: get system info\n"
         "   - find_files: query a file name pattern (use query=\"...\")\n"
