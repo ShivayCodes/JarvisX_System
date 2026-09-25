@@ -1,0 +1,6 @@
+pyaudio
+pyttsx3
+SpeechRecognition
+sounddevice
+playsound
+opencv-python
