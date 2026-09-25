@@ -1,16 +1,3 @@
-torch
-transformers
-accelerate
-sentence-transformers
-datasets
-numpy
-pyaudio
-pyttsx3
-SpeechRecognition
-python-dotenv
-opencv-python
-sounddevice
-playsound
-scikit-learn
-Pillow
-tensorflow
+# JARVIS-X runtime + local open-source AI
+-r requirements-core.txt
+-r requirements-ai.txt
