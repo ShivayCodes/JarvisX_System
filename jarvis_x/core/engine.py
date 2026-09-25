@@ -18,7 +18,8 @@ from jarvis_x.nlp.intent import IntentParser
 from jarvis_x.conversation.conversation_manager import ConversationManager
 from jarvis_x.core.environment_setup import initialize_environment
 from jarvis_x.core.plugin_manager import PluginManager
-from jarvis_x.core.llm_backend import OllamaClient
+from jarvis_x.ai.hf_backend import HuggingFaceBackend
+from jarvis_x.ai.rag import SemanticRAG
 import re
 
 
@@ -42,7 +43,9 @@ class JarvisEngine:
         self.pm = PluginManager(self)
         self.pm.discover()
 
-        self.llm_client = OllamaClient()
+        self.llm_client = HuggingFaceBackend()
+        self.rag = SemanticRAG()
+        self.rag.load()
         self.llm_history = []
         try:
             self.self_learning.dataset_learner.auto_scan_pool()
@@ -80,41 +83,34 @@ class JarvisEngine:
         if intent.action == "feedback_negative":
             return self._feedback(normalized_text, False)
 
-        # Try local LLM backend
-        if Config.LLM_ENABLED:
-            if self.llm_client.is_available():
-                try:
-                    # Retrieve context (RAG)
-                    rag_res = self.local_ai.query(normalized_text)
-                    retrieved_context = rag_res.get("result", "")
-                    
-                    # Log retrieval thought
-                    if on_thought_cb:
-                        on_thought_cb(f"Retrieved Context: {retrieved_context[:200]}...")
-
-                    # Prepare messages payload
-                    messages = []
-                    for turn in self.llm_history:
-                        messages.append(turn)
-                    
-                    user_content = (
-                        f"Context from local knowledge base:\n{retrieved_context}\n\n"
-                        f"User query: {text}"
+        # Local open-source LLM + semantic RAG
+        if Config.LLM_ENABLED and self.llm_client.is_available():
+            try:
+                retrieved = self.rag.search(normalized_text, top_k=4)
+                if retrieved:
+                    retrieved_context = "\n\n".join(
+                        f"[Source: {item.get('source', 'local')}] {item['text']}"
+                        for item in retrieved
                     )
-                    messages.append({"role": "user", "content": user_content})
+                else:
+                    kb_res = self.local_ai.query(normalized_text)
+                    retrieved_context = kb_res.get("result", "")
 
-                    # Call LLM
-                    raw_response = self.llm_client.chat(messages, Config.SYSTEM_PROMPT)
+                if on_thought_cb:
+                    on_thought_cb(f"Retrieved {len(retrieved)} semantic context items.")
 
-                    # Extract thoughts
-                    thinking_content = ""
-                    thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
-                    if thinking_match:
-                        thinking_content = thinking_match.group(1).strip()
-                        if on_thought_cb and thinking_content:
-                            on_thought_cb(thinking_content)
-                    
-                    # Clean response
+                messages = [{"role": "system", "content": Config.SYSTEM_PROMPT}]
+                messages.extend(self.llm_history[-Config.CONTEXT_WINDOW:])
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Use the supplied context when it is relevant. "
+                        "If the context does not support an answer, say so instead of inventing facts.\n\n"
+                        f"Context:\n{retrieved_context}\n\nUser query: {text}"
+                    ),
+                })
+                raw_response = self.llm_client.chat(messages)
+
                     cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
 
                     # Handle Tool Use
@@ -144,14 +140,7 @@ class JarvisEngine:
                             messages.append({"role": "assistant", "content": raw_response})
                             messages.append({"role": "user", "content": f"Tool '{tool_name}' output: {tool_result}"})
                             
-                            raw_response = self.llm_client.chat(messages, Config.SYSTEM_PROMPT)
-                            
-                            # Parse thinking again if any
-                            thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw_response, re.DOTALL)
-                            if thinking_match:
-                                thinking_content = thinking_match.group(1).strip()
-                                if on_thought_cb and thinking_content:
-                                    on_thought_cb(thinking_content)
+                            raw_response = self.llm_client.chat(messages)
                             
                             cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
 
@@ -180,7 +169,7 @@ class JarvisEngine:
                     return cleaned_response
                 except Exception as e:
                     if on_thought_cb:
-                        on_thought_cb(f"LLM Error: {e}. Falling back to standard algorithms.")
+                        on_thought_cb(f"Local AI error: {e}. Falling back to the deterministic engine.")
 
         # Fallback to standard TF-IDF & Markov
         if on_thought_cb:
@@ -256,7 +245,7 @@ class JarvisEngine:
             f"Commands: open site [url] | system info | find files for [name] | "
             f"remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
             f"+1 / -1 to teach me\n\n"
-            f"AI Config: Fully Local LLM (Ollama) with TF-IDF fallback | Critical Thinking ({ct_status})\n"
+            f"AI Config: Hugging Face local LLM + semantic RAG + TF-IDF fallback | Critical Thinking ({ct_status})\n"
             f"Toggle Critical Thinking: 'enable critical thinking' / 'disable critical thinking'"
         )
 
