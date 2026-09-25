@@ -1,5 +1,8 @@
 torch
+transformers
+accelerate
 sentence-transformers
+datasets
 numpy
 pyaudio
 pyttsx3
