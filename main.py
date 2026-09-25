@@ -144,7 +144,7 @@ def main():
         print(report)
         return
 
-    if args.ingest_squad:
+    if args.ingest_squad is not None:
         from scripts.ingest_squad import main as ingest_main
         import sys as _sys
         _sys.argv = [_sys.argv[0], "--limit", str(args.ingest_squad)]
