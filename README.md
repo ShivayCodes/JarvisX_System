@@ -125,11 +125,17 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-python main.py --ingest-squad 5000
+python main.py --ingest-squad 1000
 python main.py --cli
 ```
 
 The first run downloads model and dataset assets into local caches. The repository itself does not store model weights, dataset dumps, databases, credentials, or personal memory.
+
+For voice/camera features, install the optional desktop stack:
+
+```bash
+pip install -r requirements-desktop.txt
+```
 
 For lower-memory systems, begin with 1,000–5,000 dataset examples and the 360M model. Larger models can be configured later through `.env`.
 
@@ -273,7 +279,7 @@ python main.py --cli
 
 ## 📦 Dependency Stack
 
-The repository currently declares packages including **Transformers, Hugging Face Datasets, Sentence Transformers, PyTorch, NumPy, scikit-learn, TensorFlow**, plus the existing audio/GUI dependencies.
+The default runtime is split into core and AI dependencies. Desktop audio/camera packages are optional and are provided separately in `requirements-desktop.txt`.
 
 - PyTorch
 - Sentence Transformers
