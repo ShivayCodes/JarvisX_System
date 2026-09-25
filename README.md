@@ -70,6 +70,71 @@ The current codebase separates concerns across **core execution, learning, memor
 
 ---
 
+## 🧠 Real-World AI Stack
+
+JARVIS-X now uses a **local-first open-source AI pipeline**:
+
+```
+User Query
+   │
+   ▼
+Intent + Conversation
+   │
+   ├──► Semantic RAG ──► Sentence Transformers embeddings
+   │          │
+   │          └──────► Real public datasets
+   │
+   └──► Local LLM ───► Hugging Face Transformers
+                 │
+                 ▼
+          Grounded Response
+                 │
+                 ▼
+        Memory + Feedback
+```
+
+### Open-source components
+
+- **Transformers** — local text generation with `HuggingFaceTB/SmolLM2-360M-Instruct`.
+- **Sentence Transformers** — semantic embeddings and retrieval with `sentence-transformers/all-MiniLM-L6-v2`.
+- **Hugging Face Datasets** — reproducible dataset ingestion.
+- **SQuAD** — real public question-answering data for the initial RAG knowledge source.
+- **NumPy + SQLite** — lightweight local indexing and persistent memory.
+
+### Real dataset ingestion
+
+The repository does **not** commit a large dataset dump. Instead, it downloads the public dataset when requested:
+
+```bash
+python main.py --ingest-squad 5000
+```
+
+SQuAD contains question/context/answer examples derived from Wikipedia articles. Its dataset card documents the dataset structure and licensing.
+
+### Quick start
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\\Scripts\\activate
+
+# Linux/macOS
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+python main.py --ingest-squad 5000
+python main.py --cli
+```
+
+The first run downloads model and dataset assets into local caches. The repository itself does not store model weights, dataset dumps, databases, credentials, or personal memory.
+
+For lower-memory systems, begin with 1,000–5,000 dataset examples and the 360M model. Larger models can be configured later through `.env`.
+
+---
+
 ## 🚀 Current Capabilities
 
 The current entry point exposes several operational modes:
@@ -208,7 +273,7 @@ python main.py --cli
 
 ## 📦 Dependency Stack
 
-The repository currently declares packages including:
+The repository currently declares packages including **Transformers, Hugging Face Datasets, Sentence Transformers, PyTorch, NumPy, scikit-learn, TensorFlow**, plus the existing audio/GUI dependencies.
 
 - PyTorch
 - Sentence Transformers
