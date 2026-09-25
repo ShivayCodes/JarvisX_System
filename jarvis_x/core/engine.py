@@ -104,76 +104,82 @@ class JarvisEngine:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "Use the supplied context when it is relevant. "
+                        "Use the supplied context when relevant. "
                         "If the context does not support an answer, say so instead of inventing facts.\n\n"
                         f"Context:\n{retrieved_context}\n\nUser query: {text}"
                     ),
                 })
+
                 raw_response = self.llm_client.chat(messages)
+                cleaned_response = re.sub(
+                    r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL
+                ).strip()
 
-                    cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
+                # Optional structured tool calls emitted by the model.
+                tool_pattern = re.compile(r"\[TOOL:\s*(\w+)(.*?)\]")
+                tool_matches = tool_pattern.findall(cleaned_response)
+                for tool_name, args_str in tool_matches[:3]:
+                    args = {}
+                    for match in re.finditer(
+                        r'(\w+)=(?:"([^"]*)"|\'([^\']*)\'|([^\s\]]+))',
+                        args_str,
+                    ):
+                        args[match.group(1)] = next(
+                            (value for value in match.groups()[1:] if value is not None), ""
+                        )
 
-                    # Handle Tool Use
-                    tool_pattern = re.compile(r'\[TOOL:\s*(\w+)(.*?)\]')
-                    tool_matches = tool_pattern.findall(cleaned_response)
-                    
-                    if tool_matches:
-                        for tool_name, args_str in tool_matches:
-                            args = {}
-                            for k, v in re.findall(r'(\w+)=(?:"([^"]*)"|\'([^\']*)\'|([^\s\]]+))', args_str):
-                                args[k] = v[0] or v[1] or v[2] if isinstance(v, tuple) else v
-                            
-                            # Clean args dict
-                            clean_args = {}
-                            for key, val in args.items():
-                                if isinstance(val, tuple):
-                                    clean_args[key] = next((x for x in val if x), "")
-                                else:
-                                    clean_args[key] = val
-
-                            if on_thought_cb:
-                                on_thought_cb(f"Executing tool: {tool_name} with args {clean_args}")
-                            
-                            tool_result = self._execute_tool(tool_name, clean_args)
-                            
-                            # Feed back to LLM
-                            messages.append({"role": "assistant", "content": raw_response})
-                            messages.append({"role": "user", "content": f"Tool '{tool_name}' output: {tool_result}"})
-                            
-                            raw_response = self.llm_client.chat(messages)
-                            
-                            cleaned_response = re.sub(r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL).strip()
-
-                    # Handle Artifacts
-                    artifact_pattern = re.compile(r'\[ARTIFACT:\s*([^\s\]]+)\](.*?)\[/ARTIFACT\]', re.DOTALL)
-                    artifact_matches = artifact_pattern.findall(cleaned_response)
-                    if artifact_matches:
-                        project_root = Path(__file__).resolve().parents[2]
-                        artifacts_dir = project_root / "artifacts"
-                        artifacts_dir.mkdir(parents=True, exist_ok=True)
-                        
-                        for filename, content in artifact_matches:
-                            filepath = artifacts_dir / filename
-                            filepath.write_text(content.strip(), encoding="utf-8")
-                            
-                            note = f"\n\n[Artifact saved to: {filepath.name}]"
-                            cleaned_response += note
-                            
-                            # Automatically open HTML/SVG files
-                            if filename.lower().endswith((".html", ".htm", ".svg")):
-                                webbrowser.open(filepath.as_uri())
-
-                        # Strip artifact tags from final printed response to keep it clean
-                        cleaned_response = re.sub(r'\[ARTIFACT:\s*[^\s\]]+\].*?\[/ARTIFACT\]', '', cleaned_response, flags=re.DOTALL).strip()
-
-                    return cleaned_response
-                except Exception as e:
                     if on_thought_cb:
-                        on_thought_cb(f"Local AI error: {e}. Falling back to the deterministic engine.")
+                        on_thought_cb(f"Executing tool: {tool_name}")
+
+                    tool_result = self._execute_tool(tool_name, args)
+                    messages.append({"role": "assistant", "content": raw_response})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Tool '{tool_name}' output: {tool_result}",
+                    })
+                    raw_response = self.llm_client.chat(messages)
+                    cleaned_response = re.sub(
+                        r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL
+                    ).strip()
+
+                # Artifact generation remains local and opt-in through explicit tags.
+                artifact_pattern = re.compile(
+                    r"\[ARTIFACT:\s*([^\s\]]+)\](.*?)\[/ARTIFACT\]",
+                    re.DOTALL,
+                )
+                artifact_matches = artifact_pattern.findall(cleaned_response)
+                if artifact_matches:
+                    project_root = Path(__file__).resolve().parents[2]
+                    artifacts_dir = project_root / "artifacts"
+                    artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    for filename, content in artifact_matches:
+                        filepath = artifacts_dir / filename
+                        filepath.write_text(content.strip(), encoding="utf-8")
+                        cleaned_response += f"\n\n[Artifact saved to: {filepath.name}]"
+                        if filename.lower().endswith((".html", ".htm", ".svg")):
+                            webbrowser.open(filepath.as_uri())
+                    cleaned_response = re.sub(
+                        r"\[ARTIFACT:\s*[^\s\]]+\].*?\[/ARTIFACT\]",
+                        "",
+                        cleaned_response,
+                        flags=re.DOTALL,
+                    ).strip()
+
+                self.llm_history.extend([
+                    {"role": "user", "content": text},
+                    {"role": "assistant", "content": cleaned_response},
+                ])
+                self.llm_history = self.llm_history[-(Config.CONTEXT_WINDOW * 2):]
+                return cleaned_response
+            except Exception as e:
+                if on_thought_cb:
+                    on_thought_cb(
+                        f"Local AI error: {e}. Falling back to the deterministic engine."
+                    )
 
         # Fallback to standard TF-IDF & Markov
         if on_thought_cb:
-            on_thought_cb("[Warning] Local LLM (Ollama) is not running/available. Falling back to TF-IDF & Markov engine. To enable local LLMs, start Ollama locally.")
+            on_thought_cb("[Warning] Local open-source model unavailable. Falling back to TF-IDF & Markov engine.")
         
         correction = self.self_learning.handle_correction(normalized_text)
         if correction:
