@@ -6,11 +6,7 @@ from jarvis_x.core.config import Config
 
 
 class HuggingFaceBackend:
-    """Small local instruction model using Hugging Face Transformers.
-
-    Models are downloaded once to the local Hugging Face cache and then run
-    locally. No API key or hosted inference service is required.
-    """
+    """Local instruction-model backend with lazy loading and safe fallbacks."""
 
     def __init__(self, model_id: str | None = None):
         self.model_id = model_id or Config.HF_MODEL_ID
@@ -28,40 +24,62 @@ class HuggingFaceBackend:
     def _load(self) -> None:
         if self._model is not None:
             return
+
         from transformers import AutoModelForCausalLM, AutoTokenizer
         import torch
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        dtype = torch.float32
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
-            torch_dtype=dtype,
+            torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
         )
         self._model.eval()
 
-    def chat(self, messages: Iterable[dict], max_new_tokens: int | None = None) -> str:
+    def chat(
+        self,
+        messages: Iterable[dict],
+        max_new_tokens: int | None = None,
+    ) -> str:
         self._load()
         import torch
 
         messages = list(messages)
-        prompt = self._tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
+        try:
+            prompt = self._tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except (AttributeError, ValueError):
+            prompt = "\n".join(
+                f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+                for m in messages
+            ) + "\nASSISTANT:"
+
+        inputs = self._tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=min(
+                getattr(self._tokenizer, "model_max_length", 4096), 4096
+            ),
         )
-        inputs = self._tokenizer(prompt, return_tensors="pt")
+
         with torch.inference_mode():
             output = self._model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens or Config.HF_MAX_NEW_TOKENS,
-                do_sample=True,
-                temperature=Config.HF_TEMPERATURE,
+                do_sample=Config.HF_TEMPERATURE > 0,
+                temperature=max(Config.HF_TEMPERATURE, 1e-5),
                 top_p=Config.HF_TOP_P,
                 pad_token_id=self._tokenizer.eos_token_id,
             )
+
         generated = output[0][inputs["input_ids"].shape[-1]:]
-        return self._tokenizer.decode(generated, skip_special_tokens=True).strip()
+        return self._tokenizer.decode(
+            generated, skip_special_tokens=True
+        ).strip()
 
     def unload(self) -> None:
         self._model = None
