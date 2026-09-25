@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--stats", action="store_true", help="Show offline knowledge statistics")
     parser.add_argument("--validate", action="store_true", help="Validate local dataset files")
     parser.add_argument("--benchmark", action="store_true", help="Run a simple offline benchmark")
+    parser.add_argument("--ingest-squad", type=int, metavar="N", help="Download and index N examples from the public SQuAD dataset")
     args = parser.parse_args()
 
     if args.install:
@@ -141,6 +142,13 @@ def main():
     if args.validate:
         report = DatasetValidator(Config.DATASET_POOL_DIR).validate_directory(Config.DATASET_POOL_DIR)
         print(report)
+        return
+
+    if args.ingest_squad:
+        from scripts.ingest_squad import main as ingest_main
+        import sys as _sys
+        _sys.argv = [_sys.argv[0], "--limit", str(args.ingest_squad)]
+        ingest_main()
         return
 
     if args.benchmark:
