@@ -58,6 +58,11 @@ class WebSkill(BaseSkill):
 
             # Learn from this text
             learned_count = self._learn_from_text(extracted_text, source=url)
+            try:
+                learned_rag = self.engine.rag.add([{"text": extracted_text, "source": url, "type": "web"}])
+                self.engine.rag.save()
+            except Exception:
+                learned_rag = 0
             
             # Rebuild AI index
             self.engine.local_ai.rebuild_index()
@@ -65,7 +70,7 @@ class WebSkill(BaseSkill):
             snippet = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
             return (
                 f"Successfully scraped content from {url}.\n"
-                f"Learned {learned_count} facts/sentences from the page.\n\n"
+                f"Learned {learned_count} facts/sentences and indexed {learned_rag} semantic chunks.\n\n"
                 f"Preview:\n{snippet}"
             )
 
