@@ -1,1 +1,1 @@
-from .conversation_manager import ConversationManager
+"""Conversation management for JARVIS-X."""

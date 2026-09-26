@@ -1,30 +1,33 @@
-import os
+"""Plugin discovery and management for JARVIS-X."""
 import importlib
-import pkgutil
-from typing import Dict
-
-from jarvis_x.core.config import Config
+from pathlib import Path
 
 
 class PluginManager:
+    """Discovers and manages plugins."""
+
     def __init__(self, engine):
+        """
+        Initialize the plugin manager.
+        
+        Args:
+            engine: The JarvisEngine instance.
+        """
         self.engine = engine
-        self.skills: Dict[str, object] = {}
+        self.plugins = {}
 
     def discover(self):
-        skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills")
-        if not os.path.isdir(skills_dir):
-            return
-        for importer, modname, ispkg in pkgutil.iter_modules([skills_dir]):
-            if modname == "base" or modname.startswith("_"):
-                continue
-            try:
-                mod = importlib.import_module(f"jarvis_x.skills.{modname}")
-                if hasattr(mod, "register"):
-                    mod.register(self.engine, self)
-            except Exception as e:
-                print(f"[PluginManager] Failed to load {modname}: {e}")
-
-    def register_skill(self, name: str, handler):
-        self.skills[name] = handler
-        self.engine.kb.log_learning("plugin_loaded", name)
+        """Discover available plugins in the skills directory."""
+        skills_dir = Path(__file__).parent.parent / "skills"
+        if skills_dir.exists():
+            for skill_file in skills_dir.glob("*.py"):
+                if skill_file.name.startswith("_"):
+                    continue
+                skill_name = skill_file.stem
+                try:
+                    module = importlib.import_module(f"jarvis_x.skills.{skill_name}")
+                    if hasattr(module, "register"):
+                        module.register(self.engine)
+                        self.plugins[skill_name] = module
+                except Exception as e:
+                    print(f"Warning: Failed to load plugin {skill_name}: {e}")

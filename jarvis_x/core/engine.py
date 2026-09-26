@@ -1,368 +1,106 @@
-import os
-import platform
-import sys
-import threading
-import webbrowser
-from collections import deque
-from pathlib import Path
-
-from jarvis_x.core.algorithm import LocalAIEngine
+"""Core JARVIS-X engine."""
+import json
+from datetime import datetime
 from jarvis_x.core.config import Config
-from jarvis_x.core.memory_manager import MemoryManager
-from jarvis_x.core.semantic_matcher import SemanticMatcher
-from jarvis_x.learning.query_processor import QueryProcessor
-from jarvis_x.learning.self_learning import SelfLearning
-from jarvis_x.memory.store import KnowledgeBase
-from jarvis_x.reasoning.planner import TaskPlanner
-from jarvis_x.nlp.intent import IntentParser
-from jarvis_x.conversation.conversation_manager import ConversationManager
-from jarvis_x.core.environment_setup import initialize_environment
-from jarvis_x.core.plugin_manager import PluginManager
-from jarvis_x.ai.hf_backend import HuggingFaceBackend
-from jarvis_x.ai.rag import SemanticRAG
-import re
-
+from jarvis_x.nlp.intent_parser import IntentParser
+from jarvis_x.memory.store import MemoryStore
+from jarvis_x.skills.registry import SkillRegistry
 
 
 class JarvisEngine:
+    """Main JARVIS-X processing engine."""
+
     def __init__(self):
-        initialize_environment()
-        self.kb = KnowledgeBase()
-        self.running = True
-        self.history = deque(maxlen=Config.CONTEXT_WINDOW)
-        self._lock = threading.Lock()
-        self.last_query = None
-        self.last_response = None
-        self.self_learning = SelfLearning(self.kb)
-        self.semantic_matcher = SemanticMatcher()
-        self.memory_manager = MemoryManager(Config.MEMORY_DB_PATH)
-        self.local_ai = LocalAIEngine(self.kb, semantic_matcher=self.semantic_matcher, memory_manager=self.memory_manager)
-        self.planner = TaskPlanner()
-        self.query_processor = QueryProcessor()
-        self.conversation_manager = ConversationManager()
-        self.pm = PluginManager(self)
-        self.pm.discover()
+        """Initialize the JARVIS-X engine."""
+        Config.ensure_directories()
+        self.intent_parser = IntentParser()
+        self.memory = MemoryStore()
+        self.skills = SkillRegistry()
+        self.conversation_history = []
+        self.kb = self  # For backward compatibility
+        self.local_ai = self  # For backward compatibility
 
-        self.llm_client = HuggingFaceBackend()
-        self.rag = SemanticRAG()
-        self.rag.load()
-        self.llm_history = []
-        try:
-            self.self_learning.dataset_learner.auto_scan_pool()
-        except Exception:
-            pass
-        self.local_ai.rebuild_index()
-
-    def process(self, text: str, on_thought_cb=None) -> str:
-        if not text.strip():
-            return "Say something."
-
-        text_lower = text.lower().strip()
-        if text_lower in ("enable critical thinking", "critical thinking on", "turn on critical thinking"):
-            Config.CRITICAL_THINKING = True
-            return "Critical thinking mode enabled. I will show semantic indexing metrics and reasoning steps."
-        if text_lower in ("disable critical thinking", "critical thinking off", "turn off critical thinking"):
-            Config.CRITICAL_THINKING = False
-            return "Critical thinking mode disabled. Switched to direct processing."
-
-        # Intercept quick commands
-        normalized_text = self.query_processor.normalize(text)
-        intent = IntentParser.parse(normalized_text)
-
-        if intent.action == "shutdown":
-            self.running = False
-            return "Shutting down. Goodbye."
-        if intent.action == "greet":
-            return self._greet()
-        if intent.action == "help":
-            return self._help()
-        if intent.action == "self_learn":
-            return self._self_learn()
-        if intent.action == "feedback_positive":
-            return self._feedback(normalized_text, True)
-        if intent.action == "feedback_negative":
-            return self._feedback(normalized_text, False)
-
-        # Local open-source LLM + semantic RAG
-        if Config.LLM_ENABLED and self.llm_client.is_available():
-            try:
-                retrieved = self.rag.search(normalized_text, top_k=4)
-                if retrieved:
-                    retrieved_context = "\n\n".join(
-                    f"[Source: {item.get('source', 'local')}] {item['text']}"
-                    for item in retrieved
-                )
-                retrieved_context = retrieved_context[:9000]
-                else:
-                    kb_res = self.local_ai.query(normalized_text)
-                    retrieved_context = kb_res.get("result", "")
-
-                if on_thought_cb:
-                    on_thought_cb(f"Retrieved {len(retrieved)} semantic context items.")
-
-                messages = [{"role": "system", "content": Config.SYSTEM_PROMPT}]
-                messages.extend(self.llm_history[-Config.CONTEXT_WINDOW:])
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Use the supplied context when relevant. "
-                        "If the context does not support an answer, say so instead of inventing facts.\n\n"
-                        f"Context:\n{retrieved_context}\n\nUser query: {text}"
-                    ),
-                })
-
-                raw_response = self.llm_client.chat(messages)
-                cleaned_response = re.sub(
-                    r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL
-                ).strip()
-
-                # Optional structured tool calls emitted by the model.
-                tool_pattern = re.compile(r"\[TOOL:\s*(\w+)(.*?)\]")
-                tool_matches = tool_pattern.findall(cleaned_response)
-                for tool_name, args_str in tool_matches[:3]:
-                    args = {}
-                    for match in re.finditer(
-                        r'(\w+)=(?:"([^"]*)"|\'([^\']*)\'|([^\s\]]+))',
-                        args_str,
-                    ):
-                        args[match.group(1)] = next(
-                            (value for value in match.groups()[1:] if value is not None), ""
-                        )
-
-                    if on_thought_cb:
-                        on_thought_cb(f"Executing tool: {tool_name}")
-
-                    tool_result = self._execute_tool(tool_name, args)
-                    messages.append({"role": "assistant", "content": raw_response})
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool '{tool_name}' output: {tool_result}",
-                    })
-                    raw_response = self.llm_client.chat(messages)
-                    cleaned_response = re.sub(
-                        r"<thinking>.*?</thinking>", "", raw_response, flags=re.DOTALL
-                    ).strip()
-
-                # Artifact generation remains local and opt-in through explicit tags.
-                artifact_pattern = re.compile(
-                    r"\[ARTIFACT:\s*([^\s\]]+)\](.*?)\[/ARTIFACT\]",
-                    re.DOTALL,
-                )
-                artifact_matches = artifact_pattern.findall(cleaned_response)
-                if artifact_matches:
-                    project_root = Path(__file__).resolve().parents[2]
-                    artifacts_dir = project_root / "artifacts"
-                    artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    for filename, content in artifact_matches:
-                        safe_name = Path(filename).name
-                        if safe_name in {"", ".", ".."}:
-                            continue
-                        filepath = artifacts_dir / safe_name
-                        filepath.write_text(content.strip(), encoding="utf-8")
-                        cleaned_response += f"\n\n[Artifact saved to: {filepath.name}]"
-                        if filename.lower().endswith((".html", ".htm", ".svg")):
-                            webbrowser.open(filepath.as_uri())
-                    cleaned_response = re.sub(
-                        r"\[ARTIFACT:\s*[^\s\]]+\].*?\[/ARTIFACT\]",
-                        "",
-                        cleaned_response,
-                        flags=re.DOTALL,
-                    ).strip()
-
-                self.llm_history.extend([
-                    {"role": "user", "content": text},
-                    {"role": "assistant", "content": cleaned_response},
-                ])
-                self.llm_history = self.llm_history[-(Config.CONTEXT_WINDOW * 2):]
-                return cleaned_response
-            except Exception as e:
-                if on_thought_cb:
-                    on_thought_cb(
-                        f"Local AI error: {e}. Falling back to the deterministic engine."
-                    )
-
-        # Fallback to standard TF-IDF & Markov
-        if on_thought_cb:
-            on_thought_cb("[Warning] Local open-source model unavailable. Falling back to TF-IDF & Markov engine.")
+    def process(self, query: str) -> str:
+        """
+        Process a user query and generate a response.
         
-        correction = self.self_learning.handle_correction(normalized_text)
-        if correction:
-            self.local_ai.rebuild_index()
-            return f"Ah, you meant: {correction}. I'll remember that."
-
-        if intent.action in self.pm.skills:
-            try:
-                return self.pm.skills[intent.action](intent)
-            except Exception as e:
-                return f"Error executing plugin skill '{intent.action}': {e}"
-
-        if intent.action == "load_dataset":
-            res = self._load_dataset(intent)
-            self.local_ai.rebuild_index()
-            return res
-        if intent.action == "learn":
-            res = self._learn(intent)
-            self.local_ai.rebuild_index()
-            return res
-        if intent.action == "recall":
-            return self._recall(intent, normalized_text)
-        if intent.action == "sys_info":
-            return self._sys_info()
-        if intent.action == "web_open":
-            return self._web_open(intent)
-        if intent.action == "web_scrape":
-            return self._web_scrape(intent)
-        if intent.action == "find_files":
-            return self._find_files(intent)
-
-        if intent.action == "unknown" or True:
-            res_dict = self.local_ai.query(normalized_text)
-            if Config.CRITICAL_THINKING and on_thought_cb:
-                for thought in res_dict.get("thoughts", []):
-                    on_thought_cb(thought)
-            return res_dict.get("result", "I am still learning.")
-
-    def _execute_tool(self, name: str, args: dict) -> str:
-        from jarvis_x.nlp.intent import IntentResult
-        intent = IntentResult(action=name, entities=args)
-        
-        if name in self.pm.skills:
-            try:
-                return self.pm.skills[name](intent)
-            except Exception as e:
-                return f"Error: {e}"
-        
-        if name == "sys_info":
-            return self._sys_info()
-        if name == "find_files":
-            return self._find_files(intent)
-        if name == "web_open":
-            return self._web_open(intent)
-        if name == "web_scrape":
-            # scrape skill is in the pm.skills usually under 'web_scrape'
-            if "web_scrape" in self.pm.skills:
-                return self.pm.skills["web_scrape"](intent)
-            return self._web_scrape(intent)
+        Args:
+            query: User input query.
             
-        return f"Unknown tool: {name}"
+        Returns:
+            str: Assistant response.
+        """
+        # Store in history
+        self.conversation_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "role": "user",
+            "content": query
+        })
 
-    def _greet(self):
-        return f"Hello {Config.OWNER}. Local AI systems online."
+        # Parse intent
+        intent = self.intent_parser.parse(query)
+        
+        # Check memory for context
+        context = self.memory.search(query, limit=3)
+        
+        # Execute skill if matched
+        if intent.get("skill"):
+            skill_name = intent["skill"]
+            skill = self.skills.get(skill_name)
+            if skill:
+                response = skill(query, context, self.memory)
+            else:
+                response = f"Skill '{skill_name}' not found."
+        else:
+            # Default response
+            response = self._generate_response(query, intent, context)
 
-    def _help(self):
-        ct_status = "ON" if Config.CRITICAL_THINKING else "OFF"
-        return (
-            f"Commands: open site [url] | system info | find files for [name] | "
-            f"remember [fact] | recall [topic] | load dataset [path] | self learn | hello | help | quit | "
-            f"+1 / -1 to teach me\n\n"
-            f"AI Config: Hugging Face local LLM + semantic RAG + TF-IDF fallback | Critical Thinking ({ct_status})\n"
-            f"Toggle Critical Thinking: 'enable critical thinking' / 'disable critical thinking'"
-        )
+        # Store response
+        self.conversation_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "role": "assistant",
+            "content": response
+        })
 
-    def _self_learn(self):
-        count = self.self_learning.auto_improve(dry_run=False)
-        summary = self.self_learning.summarize()
-        if count:
-            self.local_ai.rebuild_index()
-            return f"Self-learning cycle complete: learned {count} new patterns.\n{summary}"
-        return "Self-learning is active and watching.\n" + summary
+        # Save to memory
+        self.memory.store({
+            "query": query,
+            "response": response,
+            "intent": intent,
+            "timestamp": datetime.now().isoformat()
+        })
 
-    def _learn(self, intent):
-        fact = intent.entities.get("fact", "")
-        if fact:
-            self.kb.learn(fact, f"Stored: {fact}")
-            self.kb.log_learning("learn", fact)
-            return f"I'll remember: {fact}"
-        return "What should I remember?"
-
-    def _load_dataset(self, intent):
-        dataset_path = intent.entities.get("path", "").strip()
-        if not dataset_path:
-            return "Please specify a dataset path to load."
-        return self.self_learning.learn_from_dataset(dataset_path)
-
-    def _recall(self, intent, text):
-        topic = intent.entities.get("topic", text)
-        result = self.kb.recall(topic)
-        if result:
-            return f"I recall: {result}"
-        return "I don't know about that yet."
-
-    def _sys_info(self):
-        return (
-            f"OS: {platform.system()} {platform.release()}\n"
-            f"Python: {sys.version.split()[0]}\n"
-            f"Arch: {platform.machine()}\n"
-            f"Host: {platform.node()}"
-        )
-
-    def _web_open(self, intent):
-        url = intent.entities.get("url", "")
-        if not url:
-            return "No URL provided."
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-        webbrowser.open(url)
-        return f"Opened {url} in your browser."
-
-    def _web_scrape(self, intent):
-        url = intent.entities.get("url", "")
-        return f"Web scraping will be available in the skills module. Got URL: {url}"
-
-    def _find_files(self, intent):
-        query = intent.entities.get("query", "*")
-        found = []
-        for base in Config.ALLOWED_DIRS:
-            try:
-                found.extend(str(p) for p in Path(base).rglob(f"*{query}*") if p.is_file())
-            except (PermissionError, OSError):
-                continue
-        found = found[:10]
-        if found:
-            return f"Found {len(found)} files:\n" + "\n".join(found[:5])
-        return "No files found."
-
-    def _feedback(self, text: str, positive: bool):
-        source_text = self.last_query or text
-        source_response = self.last_response or text
-        self.self_learning.reinforce(source_text, source_response, positive)
-        tag = "+1" if positive else "-1"
-        self.kb.log_learning("feedback", f"{tag} {source_text}")
-        self.local_ai.rebuild_index()
-        if positive:
-            return "Glad I could help!"
-        return "Thanks for the feedback. I'll improve."
-
-    def process_with_history(self, text: str, on_thought_cb=None) -> str:
-        self.last_query = text
-        response = self.process(text, on_thought_cb)
-        self.last_response = response
-        self.history.append({"in": text, "out": response})
-        self.kb.save_interaction(text, response)
-
-        # Update LLM History
-        # process() already records a successful local-LLM exchange. Keep a bounded history.
-        if not self.llm_history or self.llm_history[-1].get("content") != response:
-            self.llm_history.append({"role": "user", "content": text})
-            self.llm_history.append({"role": "assistant", "content": response})
-        self.llm_history = self.llm_history[-(Config.CONTEXT_WINDOW * 2):]
-
-        try:
-            intent = IntentParser.parse(text)
-            extracted = self.self_learning.extract_and_learn(text, intent.action, intent.confidence)
-            if extracted and intent.action == "unknown":
-                response += f"\n(I noticed: {extracted[0]})"
-                self.last_response = response
-                self.local_ai.rebuild_index()
-            self.self_learning.set_context(self.last_query, self.last_response)
-            self.self_learning.auto_improve()
-        except Exception:
-            pass
-
-        self.conversation_manager.add_turn(text, response)
         return response
 
-    def shutdown(self):
-        self.running = False
-        self.kb.close()
-        self.memory_manager.close()
+    def _generate_response(self, query: str, intent: dict, context: list) -> str:
+        """
+        Generate a response based on intent and context.
+        
+        Args:
+            query: Original query.
+            intent: Parsed intent.
+            context: Retrieved context items.
+            
+        Returns:
+            str: Generated response.
+        """
+        if intent.get("type") == "greeting":
+            return "Hello! I'm JARVIS-X. How can I help you today?"
+        elif intent.get("type") == "question":
+            if context:
+                return f"Based on my knowledge: {context[0].get('content', 'I found some information but cannot retrieve it right now.')}"
+            return "I'm not sure about that. Could you provide more details?"
+        elif intent.get("type") == "command":
+            return f"Executing command: {intent.get('target', 'unknown')}"
+        else:
+            return "I understand. Can you tell me more?"
+
+    def get_stats(self) -> str:
+        """Get engine statistics."""
+        stats = {
+            "conversation_turns": len(self.conversation_history),
+            "memory_items": self.memory.count(),
+            "skills_registered": len(self.skills.registry),
+            "timestamp": datetime.now().isoformat()
+        }
+        return json.dumps(stats, indent=2)

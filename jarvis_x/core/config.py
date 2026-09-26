@@ -1,68 +1,44 @@
+"""Configuration management for JARVIS-X."""
 import os
-import platform as _platform
+import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
-IS_WINDOWS = _platform.system() == "Windows"
-IS_LINUX = _platform.system() == "Linux"
-IS_MAC = _platform.system() == "Darwin"
+# Platform detection
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform == "linux"
+IS_MAC = sys.platform == "darwin"
 
-_project_root = Path(__file__).resolve().parents[2]
-_root_dir = str(_project_root)
+# Load environment
+load_dotenv()
 
 
 class Config:
-    OWNER = os.getenv("USER") or os.getenv("USERNAME") or "User"
-    DB_PATH = os.path.join(_root_dir, "data", "jarvis_v6.db")
-    MEMORY_DB_PATH = os.path.join(_root_dir, "data", "memory.db")
-    MEMORY_DIR = os.path.join(_root_dir, "jarvis_memory")
-    BROWSER_PROFILE = os.path.join(os.path.expanduser("~"), ".jarvis_stealth_context")
-    HEADLESS = True
-    VIEWPORT = {"width": 1366, "height": 768}
-    DELAY_MIN = 0.1
-    DELAY_MAX = 0.7
-    MOUSE_ARC_NOISE = 5.0
-    ALLOWED_DIRS = [os.path.expanduser("~")]
-    GUI_TITLE = "JARVIS-X v7.0"
-    GUI_WIDTH = 800
-    GUI_HEIGHT = 600
-    APP_NAME = "JarvisX"
-    CONTEXT_WINDOW = 50
-    CONFIDENCE_THRESHOLD = 0.3
-    CRITICAL_THINKING = True
-    DATASET_POOL_DIR = os.path.join(_root_dir, "dataset_pool")
-    CACHE_DIR = os.path.join(_root_dir, "cache")
-    TF_IDF_MIN_DF = 1
-    TF_IDF_MAX_DF = 0.95
-    SIMILARITY_THRESHOLD = 0.35
-    MARKOV_ORDER = 2
-    WEIGHT_DECAY_RATE = 0.95
-    CONFIDENCE_MIN_THRESHOLD = 0.3
-    VECTOR_CACHE_SIZE = 10000
-    BATCH_FEEDBACK_SIZE = 100
-    MEMORY_COMPACTION_INTERVAL = 7
-    LLM_ENABLED = True
-    HF_MODEL_ID = os.getenv("JARVISX_HF_MODEL", "HuggingFaceTB/SmolLM2-360M-Instruct")
-    EMBEDDING_MODEL_ID = os.getenv("JARVISX_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    HF_MAX_NEW_TOKENS = int(os.getenv("JARVISX_MAX_NEW_TOKENS", "256"))
-    HF_TEMPERATURE = float(os.getenv("JARVISX_TEMPERATURE", "0.3"))
-    HF_TOP_P = float(os.getenv("JARVISX_TOP_P", "0.9"))
-    RAG_INDEX_PATH = os.path.join(_root_dir, "cache", "rag_documents.json")
-    RAG_MIN_SCORE = 0.35
-    SYSTEM_PROMPT = (
-        "You are JARVIS-X, a local-first AI assistant. "
-        "Your goal is to help the user with any queries. You must follow the instructions below:\n"
-        "1. Give concise final answers. Do not expose private chain-of-thought or hidden reasoning.\n"
-        "2. If you need info not directly in context, you can make tool calls by writing: [TOOL: name key=val]. Available tools are:\n"
-        "   - sys_info: get system info\n"
-        "   - find_files: query a file name pattern (use query=\"...\")\n"
-        "   - web_open: open a URL in user browser (use url=\"...\")\n"
-        "   - web_scrape: scrape and learn from a URL (use url=\"...\")\n"
-        "3. If you want to create or edit a web app, a script, or an interactive document, you can generate an Artifact using the tag: [ARTIFACT: filename]content[/ARTIFACT]. Keep the code complete and premium.\n"
-        "4. Always output final helpful replies after the </thinking> block."
-    )
+    """Central configuration object for JARVIS-X."""
 
+    # Paths
+    BASE_DIR = Path(__file__).parent.parent.parent
+    DATA_DIR = BASE_DIR / "data"
+    DATASET_POOL_DIR = BASE_DIR / "dataset_pool"
+    DB_PATH = DATA_DIR / "jarvis.db"
+    MEMORY_PATH = DATA_DIR / "memory"
+    EMBEDDINGS_PATH = DATA_DIR / "embeddings"
 
-os.makedirs(Config.MEMORY_DIR, exist_ok=True)
-os.makedirs(Config.DATASET_POOL_DIR, exist_ok=True)
-os.makedirs(Config.CACHE_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(Config.DB_PATH), exist_ok=True)
+    # AI Models
+    HF_MODEL = os.getenv("JARVISX_HF_MODEL", "HuggingFaceTB/SmolLM2-360M-Instruct")
+    EMBEDDING_MODEL = os.getenv("JARVISX_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+    # LLM Parameters
+    MAX_NEW_TOKENS = int(os.getenv("JARVISX_MAX_NEW_TOKENS", "256"))
+    TEMPERATURE = float(os.getenv("JARVISX_TEMPERATURE", "0.3"))
+    TOP_P = float(os.getenv("JARVISX_TOP_P", "0.9"))
+
+    # Features
+    ENABLE_VOICE = os.getenv("JARVISX_ENABLE_VOICE", "false").lower() == "true"
+    ENABLE_VISION = os.getenv("JARVISX_ENABLE_VISION", "false").lower() == "true"
+
+    @classmethod
+    def ensure_directories(cls):
+        """Create required directories if they don't exist."""
+        for directory in [cls.DATA_DIR, cls.DATASET_POOL_DIR, cls.MEMORY_PATH, cls.EMBEDDINGS_PATH]:
+            directory.mkdir(parents=True, exist_ok=True)

@@ -1,29 +1,42 @@
+"""Command-line interface for JARVIS-X."""
 import sys
-from jarvis_x.core.config import Config
 
 
 class JarvisCLI:
+    """Command-line interface."""
+
     def __init__(self, engine):
+        """
+        Initialize the CLI.
+        
+        Args:
+            engine: JarvisEngine instance.
+        """
         self.engine = engine
 
     def run(self):
-        print(f"\n  JARVIS-X v7.0  |  {Config.OWNER}")
-        print("  Type 'help' for commands | 'quit' to exit\n")
-        while self.engine.running:
+        """Run the CLI interface."""
+        print("\n" + "="*60)
+        print("  JARVIS-X v7.0 - Local AI Assistant")
+        print("  Type 'exit', 'quit', or 'q' to exit")
+        print("="*60 + "\n")
+
+        while True:
             try:
-                text = input(f"[{Config.OWNER}]> ").strip()
-                if not text:
+                user_input = input("You: ").strip()
+                
+                if not user_input:
                     continue
                 
-                def on_thought(thought_text):
-                    print(f"  [Thinking] {thought_text}")
+                if user_input.lower() in ["exit", "quit", "q"]:
+                    print("\nGoodbye! Thanks for using JARVIS-X.\n")
+                    break
                 
-                response = self.engine.process_with_history(text, on_thought_cb=on_thought)
-                print(f"  JARVIS: {response}")
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
+                response = self.engine.process(user_input)
+                print(f"JARVIS: {response}\n")
+                
+            except KeyboardInterrupt:
+                print("\n\nInterrupted. Exiting...")
+                sys.exit(0)
             except Exception as e:
-                print(f"  Error: {e}")
-        self.engine.shutdown()
-        print("Jarvis offline.")
+                print(f"Error: {e}\n")
